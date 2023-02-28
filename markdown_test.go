@@ -1,6 +1,6 @@
 //
 // Blackfriday Markdown Processor
-// Available at http://github.com/russross/blackfriday
+// Available at http://github.com/gogather/blackfriday
 //
 // Copyright © 2011 Russ Ross <russ@russross.com>.
 // Distributed under the Simplified BSD License.
@@ -16,7 +16,6 @@ package blackfriday
 import "testing"
 
 func TestDocument(t *testing.T) {
-	t.Parallel()
 	var tests = []string{
 		// Empty document.
 		"",
@@ -26,12 +25,12 @@ func TestDocument(t *testing.T) {
 		"",
 
 		// This shouldn't panic.
-		// https://github.com/russross/blackfriday/issues/172
+		// https://github.com/gogather/blackfriday/issues/172
 		"[]:<",
 		"<p>[]:&lt;</p>\n",
 
 		// This shouldn't panic.
-		// https://github.com/russross/blackfriday/issues/173
+		// https://github.com/gogather/blackfriday/issues/173
 		"   [",
 		"<p>[</p>\n",
 	}
