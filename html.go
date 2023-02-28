@@ -699,13 +699,13 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			r.cr(w)
 		}
 	case Math:
-		r.out(w, []byte("\\("))
+		r.out(w, []byte("<span v-katex:auto>"))
 		r.out(w, escCode(node.Literal))
-		r.out(w, []byte("\\)"))
+		r.out(w, []byte("</span>"))
 	case MathBlock:
-		r.out(w, []byte("\\["))
+		r.out(w, []byte("<span v-katex:auto class=\"katex-display\">"))
 		r.out(w, escCode(node.Literal))
-		r.out(w, []byte("\\]"))
+		r.out(w, []byte("</span>"))
 		r.cr(w)
 
 	default:
