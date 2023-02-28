@@ -1,4 +1,4 @@
-Blackfriday [![Build Status](https://travis-ci.org/russross/blackfriday.svg?branch=master)](https://travis-ci.org/russross/blackfriday)
+Blackfriday [![Build Status](https://travis-ci.org/gogather/blackfriday.svg?branch=master)](https://travis-ci.org/gogather/blackfriday)
 ===========
 
 Blackfriday is a [Markdown][1] processor implemented in [Go][2]. It
@@ -23,13 +23,13 @@ tagged commit on github.
 
 With Go 1 and git installed:
 
-    go get github.com/russross/blackfriday
+    go get github.com/gogather/blackfriday
 
 will download, compile, and install the package into your `$GOPATH`
 directory hierarchy. Alternatively, you can achieve the same if you
 import it into a project:
 
-    import "github.com/russross/blackfriday"
+    import "github.com/gogather/blackfriday"
 
 and `go get` without parameters.
 
@@ -58,7 +58,7 @@ Here's an example of simple usage of blackfriday together with bluemonday:
 ``` go
 import (
     "github.com/microcosm-cc/bluemonday"
-    "github.com/russross/blackfriday"
+    "github.com/gogather/blackfriday"
 )
 
 // ...
@@ -77,14 +77,14 @@ implementations of `MarkdownBasic` and `MarkdownCommon` in
 You can also check out `blackfriday-tool` for a more complete example
 of how to use it. Download and install it using:
 
-    go get github.com/russross/blackfriday-tool
+    go get github.com/gogather/blackfriday-tool
 
 This is a simple command-line tool that allows you to process a
 markdown file using a standalone program.  You can also browse the
 source directly on github if you are just looking for some example
 code:
 
-* <http://github.com/russross/blackfriday-tool>
+* <http://github.com/gogather/blackfriday-tool>
 
 Note that if you have not already done so, installing
 `blackfriday-tool` will be sufficient to download and install
@@ -115,7 +115,7 @@ All features of Sundown are supported, including:
 
     NOTE: "safety" in this context means *runtime safety only*. In order to
     protect yourself agains JavaScript injection in untrusted content, see
-    [this example](https://github.com/russross/blackfriday#sanitize-untrusted-content).
+    [this example](https://github.com/gogather/blackfriday#sanitize-untrusted-content).
 
 *   **Fast processing**. It is fast enough to render on-demand in
     most web applications without having to cache the output.
