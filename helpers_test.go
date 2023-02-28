@@ -14,17 +14,14 @@
 package blackfriday
 
 import (
-	"fmt"
 	"io/ioutil"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 )
 
 type TestParams struct {
-	extensions        Extensions
-	referenceOverride ReferenceOverrideFunc
+	Options
 	HTMLFlags
 	HTMLRendererParameters
 }
@@ -47,26 +44,26 @@ func execRecoverableTestSuite(t *testing.T, tests []string, params TestParams, s
 
 func runMarkdown(input string, params TestParams) string {
 	params.HTMLRendererParameters.Flags = params.HTMLFlags
+	params.HTMLRendererParameters.Extensions = params.Options.Extensions
 	renderer := NewHTMLRenderer(params.HTMLRendererParameters)
-	return string(Run([]byte(input), WithRenderer(renderer),
-		WithExtensions(params.extensions),
-		WithRefOverride(params.referenceOverride)))
+	return string(Markdown([]byte(input), renderer, params.Options))
 }
 
 // doTests runs full document tests using MarkdownCommon configuration.
 func doTests(t *testing.T, tests []string) {
 	doTestsParam(t, tests, TestParams{
-		extensions: CommonExtensions,
+		Options: DefaultOptions,
 		HTMLRendererParameters: HTMLRendererParameters{
-			Flags: CommonHTMLFlags,
+			Flags:      CommonHTMLFlags,
+			Extensions: CommonExtensions,
 		},
 	})
 }
 
 func doTestsBlock(t *testing.T, tests []string, extensions Extensions) {
 	doTestsParam(t, tests, TestParams{
-		extensions: extensions,
-		HTMLFlags:  UseXHTML,
+		Options:   Options{Extensions: extensions},
+		HTMLFlags: UseXHTML,
 	})
 }
 
@@ -109,7 +106,7 @@ func doLinkTestsInline(t *testing.T, tests []string) {
 		HTMLRendererParameters: params,
 	})
 	doTestsInlineParam(t, transformTests, TestParams{
-		HTMLFlags:              UseXHTML,
+		HTMLFlags:              CommonHTMLFlags,
 		HTMLRendererParameters: params,
 	})
 }
@@ -129,7 +126,8 @@ func doSafeTestsInline(t *testing.T, tests []string) {
 }
 
 func doTestsInlineParam(t *testing.T, tests []string, params TestParams) {
-	params.extensions |= Autolink | Strikethrough
+	params.Options.Extensions |= Autolink
+	params.Options.Extensions |= Strikethrough
 	params.HTMLFlags |= UseXHTML
 	doTestsParam(t, tests, params)
 }
@@ -149,7 +147,7 @@ func transformLinks(tests []string, prefix string) []string {
 }
 
 func doTestsReference(t *testing.T, files []string, flag Extensions) {
-	params := TestParams{extensions: flag}
+	params := TestParams{Options: Options{Extensions: flag}}
 	execRecoverableTestSuite(t, files, params, func(candidate *string) {
 		for _, basename := range files {
 			filename := filepath.Join("testdata", basename+".text")
@@ -170,7 +168,8 @@ func doTestsReference(t *testing.T, files []string, flag Extensions) {
 
 			actual := string(runMarkdown(input, params))
 			if actual != expected {
-				t.Errorf("\n" + doTestDiff(basename, expected, actual))
+				t.Errorf("\n    [%#v]\nExpected[%#v]\nActual  [%#v]",
+					basename+".text", expected, actual)
 			}
 
 			// now test every prefix of every input to check for
@@ -184,25 +183,4 @@ func doTestsReference(t *testing.T, files []string, flag Extensions) {
 			}
 		}
 	})
-}
-
-func doTestDiff(name, expected, actual string) string {
-	expectedLines := strings.Split(expected, "\n")
-	actualLines := strings.Split(actual, "\n")
-	d := "file: " + name + "\n"
-	for i, line := range expectedLines {
-		// Allow the actualLines indexing to panic because we're in tests where
-		// that's okay and we probably want to know about it if this input is wrong
-		// somehow.
-		if line != actualLines[i] {
-			d += fmt.Sprintf(`
-line: %d
-
--%s
-+%s
-`, i, line, actualLines[i])
-		}
-	}
-
-	return d
 }

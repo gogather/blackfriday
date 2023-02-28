@@ -23,22 +23,8 @@ var (
 	urlRe    = `((https?|ftp):\/\/|\/)[-A-Za-z0-9+&@#\/%?=~_|!:,.;\(\)]+`
 	anchorRe = regexp.MustCompile(`^(<a\shref="` + urlRe + `"(\stitle="[^"<>]+")?\s?>` + urlRe + `<\/a>)`)
 
-	// https://www.w3.org/TR/html5/syntax.html#character-references
-	// highest unicode code point in 17 planes (2^20): 1,114,112d =
-	// 7 dec digits or 6 hex digits
-	// named entity references can be 2-31 characters with stuff like &lt;
-	// at one end and &CounterClockwiseContourIntegral; at the other. There
-	// are also sometimes numbers at the end, although this isn't inherent
-	// in the specification; there are never numbers anywhere else in
-	// current character references, though; see &frac34; and &blk12;, etc.
-	// https://www.w3.org/TR/html5/syntax.html#named-character-references
-	//
-	// entity := "&" (named group | number ref) ";"
-	// named group := [a-zA-Z]{2,31}[0-9]{0,2}
-	// number ref := "#" (dec ref | hex ref)
-	// dec ref := [0-9]{1,7}
-	// hex ref := ("x" | "X") [0-9a-fA-F]{1,6}
-	htmlEntityRe = regexp.MustCompile(`&([a-zA-Z]{2,31}[0-9]{0,2}|#([0-9]{1,7}|[xX][0-9a-fA-F]{1,6}));`)
+	// TODO: improve this regexp to catch all possible entities:
+	htmlEntityRe = regexp.MustCompile(`&[a-z]{2,5};`)
 )
 
 // Functions to parse text within a block
@@ -46,89 +32,124 @@ var (
 // data is the complete block being rendered
 // offset is the number of valid chars before the current cursor
 
-func (p *Markdown) inline(currBlock *Node, data []byte) {
-	// handlers might call us recursively: enforce a maximum depth
-	if p.nesting >= p.maxNesting || len(data) == 0 {
+func (p *parser) inline(data []byte) {
+	// this is called recursively: enforce a maximum depth
+	if p.nesting >= p.maxNesting {
 		return
 	}
 	p.nesting++
-	beg, end := 0, 0
-	for end < len(data) {
-		handler := p.inlineCallback[data[end]]
-		if handler != nil {
-			if consumed, node := handler(p, data, end); consumed == 0 {
-				// No action from the callback.
-				end++
-			} else {
-				// Copy inactive chars into the output.
-				currBlock.AppendChild(text(data[beg:end]))
-				if node != nil {
-					currBlock.AppendChild(node)
+
+	i, end := 0, 0
+	for i < len(data) {
+		// Stop at EOL
+		if data[i] == '\n' && i+1 == len(data) {
+			break
+		}
+		// Copy inactive chars into the output, but first check for one quirk:
+		// 'h', 'm' and 'f' all might trigger a check for autolink processing
+		// and end this run of inactive characters. However, there's one nasty
+		// case where breaking this run would be bad: in smartypants fraction
+		// detection, we expect things like "1/2th" to be in a single run. So
+		// we check here if an 'h' is followed by 't' (from 'http') and if it's
+		// not, we short circuit the 'h' into the run of inactive characters.
+		//
+		// Also, in a similar fashion maybeLineBreak breaks this run of chars,
+		// but smartDash processor relies on seeing context around the dashes.
+		// Fix this somehow.
+		for end < len(data) {
+			if data[end] == ' ' {
+				consumed, br := maybeLineBreak(p, data, end)
+				if consumed > 0 {
+					p.currBlock.appendChild(text(data[i:end]))
+					if br {
+						p.currBlock.appendChild(NewNode(Hardbreak))
+					}
+					i = end
+					i += consumed
+					end = i
+				} else {
+					end++
 				}
-				// Skip past whatever the callback used.
-				beg = end + consumed
-				end = beg
+				continue
 			}
+			if p.inlineCallback[data[end]] != nil {
+				if end+1 < len(data) && data[end] == 'h' && data[end+1] != 't' {
+					end++
+				} else {
+					break
+				}
+			} else {
+				end++
+			}
+		}
+
+		p.currBlock.appendChild(text(data[i:end]))
+
+		if end >= len(data) {
+			break
+		}
+		i = end
+
+		// call the trigger
+		handler := p.inlineCallback[data[end]]
+		if consumed := handler(p, data, i); consumed == 0 {
+			// no action from the callback; buffer the byte for later
+			end = i + 1
 		} else {
-			end++
+			// skip past whatever the callback used
+			i += consumed
+			end = i
 		}
 	}
-	if beg < len(data) {
-		if data[end-1] == '\n' {
-			end--
-		}
-		currBlock.AppendChild(text(data[beg:end]))
-	}
+
 	p.nesting--
 }
 
 // single and double emphasis parsing
-func emphasis(p *Markdown, data []byte, offset int) (int, *Node) {
+func emphasis(p *parser, data []byte, offset int) int {
 	data = data[offset:]
 	c := data[0]
+	ret := 0
 
 	if len(data) > 2 && data[1] != c {
 		// whitespace cannot follow an opening emphasis;
 		// strikethrough only takes two characters '~~'
 		if c == '~' || isspace(data[1]) {
-			return 0, nil
+			return 0
 		}
-		ret, node := helperEmphasis(p, data[1:], c)
-		if ret == 0 {
-			return 0, nil
+		if ret = helperEmphasis(p, data[1:], c); ret == 0 {
+			return 0
 		}
 
-		return ret + 1, node
+		return ret + 1
 	}
 
 	if len(data) > 3 && data[1] == c && data[2] != c {
 		if isspace(data[2]) {
-			return 0, nil
+			return 0
 		}
-		ret, node := helperDoubleEmphasis(p, data[2:], c)
-		if ret == 0 {
-			return 0, nil
+		if ret = helperDoubleEmphasis(p, data[2:], c); ret == 0 {
+			return 0
 		}
 
-		return ret + 2, node
+		return ret + 2
 	}
 
 	if len(data) > 4 && data[1] == c && data[2] == c && data[3] != c {
 		if c == '~' || isspace(data[3]) {
-			return 0, nil
+			return 0
 		}
-		ret, node := helperTripleEmphasis(p, data, 3, c)
-		if ret == 0 {
-			return 0, nil
+		if ret = helperTripleEmphasis(p, data, 3, c); ret == 0 {
+			return 0
 		}
 
-		return ret + 3, node
+		return ret + 3
 	}
 
-	return 0, nil
+	return 0
 }
 
-func codeSpan(p *Markdown, data []byte, offset int) (int, *Node) {
+func codeSpan(p *parser, data []byte, offset int) int {
 	data = data[offset:]
 
 	nb := 0
@@ -150,7 +171,7 @@ func codeSpan(p *Markdown, data []byte, offset int) (int, *Node) {
 
 	// no matching delimiter?
 	if i < nb && end >= len(data) {
-		return 0, nil
+		return 0
 	}
 
 	// trim outside whitespace
@@ -168,34 +189,35 @@ func codeSpan(p *Markdown, data []byte, offset int) (int, *Node) {
 	if fBegin != fEnd {
 		code := NewNode(Code)
 		code.Literal = data[fBegin:fEnd]
-		return end, code
+		p.currBlock.appendChild(code)
 	}
 
-	return end, nil
+	return end
+
 }
 
 // newline preceded by two spaces becomes <br>
-func maybeLineBreak(p *Markdown, data []byte, offset int) (int, *Node) {
+func maybeLineBreak(p *parser, data []byte, offset int) (int, bool) {
 	origOffset := offset
 	for offset < len(data) && data[offset] == ' ' {
 		offset++
 	}
-
 	if offset < len(data) && data[offset] == '\n' {
 		if offset-origOffset >= 2 {
-			return offset - origOffset + 1, NewNode(Hardbreak)
+			return offset - origOffset + 1, true
 		}
-		return offset - origOffset, nil
+		return offset - origOffset, false
 	}
-	return 0, nil
+	return 0, false
 }
 
 // newline without two spaces works when HardLineBreak is enabled
-func lineBreak(p *Markdown, data []byte, offset int) (int, *Node) {
-	if p.extensions&HardLineBreak != 0 {
-		return 1, NewNode(Hardbreak)
+func lineBreak(p *parser, data []byte, offset int) int {
+	if p.flags&HardLineBreak != 0 {
+		p.currBlock.appendChild(NewNode(Hardbreak))
+		return 1
 	}
-	return 0, nil
+	return 0
 }
 
 type linkType int
@@ -214,32 +236,32 @@ func isReferenceStyleLink(data []byte, pos int, t linkType) bool {
 	return pos < len(data)-1 && data[pos] == '[' && data[pos+1] != '^'
 }
 
-func maybeImage(p *Markdown, data []byte, offset int) (int, *Node) {
+func maybeImage(p *parser, data []byte, offset int) int {
 	if offset < len(data)-1 && data[offset+1] == '[' {
 		return link(p, data, offset)
 	}
-	return 0, nil
+	return 0
 }
 
-func maybeInlineFootnote(p *Markdown, data []byte, offset int) (int, *Node) {
+func maybeInlineFootnote(p *parser, data []byte, offset int) int {
 	if offset < len(data)-1 && data[offset+1] == '[' {
 		return link(p, data, offset)
 	}
-	return 0, nil
+	return 0
 }
 
 // '[': parse a link or an image or a footnote
-func link(p *Markdown, data []byte, offset int) (int, *Node) {
+func link(p *parser, data []byte, offset int) int {
 	// no links allowed inside regular links, footnote, and deferred footnotes
 	if p.insideLink && (offset > 0 && data[offset-1] == '[' || len(data)-1 > offset && data[offset+1] == '^') {
-		return 0, nil
+		return 0
 	}
 
 	var t linkType
 	switch {
 	// special case: ![^text] == deferred footnote (that follows something with
 	// an exclamation point)
-	case p.extensions&Footnotes != 0 && len(data)-1 > offset && data[offset+1] == '^':
+	case p.flags&Footnotes != 0 && len(data)-1 > offset && data[offset+1] == '^':
 		t = linkDeferredFootnote
 	// ![alt] == image
 	case offset >= 0 && data[offset] == '!':
@@ -247,7 +269,7 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 		offset++
 	// ^[text] == inline footnote
 	// [^refId] == deferred footnote
-	case p.extensions&Footnotes != 0:
+	case p.flags&Footnotes != 0:
 		if offset >= 0 && data[offset] == '^' {
 			t = linkInlineFootnote
 			offset++
@@ -278,7 +300,7 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 		case data[i] == '\n':
 			textHasNl = true
 
-		case isBackslashEscaped(data, i):
+		case data[i-1] == '\\':
 			continue
 
 		case data[i] == '[':
@@ -293,12 +315,11 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 	}
 
 	if i >= len(data) {
-		return 0, nil
+		return 0
 	}
 
 	txtE := i
 	i++
-	var footnoteNode *Node
 
 	// skip any amount of whitespace or newline
 	// (this is much more lax than original markdown syntax)
@@ -334,7 +355,7 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 		}
 
 		if i >= len(data) {
-			return 0, nil
+			return 0
 		}
 		linkE := i
 
@@ -359,7 +380,7 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 			}
 
 			if i >= len(data) {
-				return 0, nil
+				return 0
 			}
 
 			// skip whitespace after title
@@ -411,7 +432,7 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 			i++
 		}
 		if i >= len(data) {
-			return 0, nil
+			return 0
 		}
 		linkE := i
 
@@ -441,7 +462,7 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 		// find the reference with matching id
 		lr, ok := p.getRef(string(id))
 		if !ok {
-			return 0, nil
+			return 0
 		}
 
 		// keep link and title from reference
@@ -478,7 +499,6 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 			}
 		}
 
-		footnoteNode = NewNode(Item)
 		if t == linkInlineFootnote {
 			// create a new reference
 			noteID = len(p.notes) + 1
@@ -500,7 +520,6 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 				hasBlock: false,
 				link:     fragment,
 				title:    id,
-				footnote: footnoteNode,
 			}
 
 			p.notes = append(p.notes, ref)
@@ -511,12 +530,11 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 			// find the reference with matching id
 			lr, ok := p.getRef(string(id))
 			if !ok {
-				return 0, nil
+				return 0
 			}
 
 			if t == linkDeferredFootnote {
 				lr.noteID = len(p.notes) + 1
-				lr.footnote = footnoteNode
 				p.notes = append(p.notes, lr)
 			}
 
@@ -541,53 +559,57 @@ func link(p *Markdown, data []byte, offset int) (int, *Node) {
 
 		// links need something to click on and somewhere to go
 		if len(uLink) == 0 || (t == linkNormal && txtE <= 1) {
-			return 0, nil
+			return 0
 		}
 	}
 
 	// call the relevant rendering function
-	var linkNode *Node
 	switch t {
 	case linkNormal:
-		linkNode = NewNode(Link)
+		linkNode := NewNode(Link)
 		linkNode.Destination = normalizeURI(uLink)
 		linkNode.Title = title
+		p.currBlock.appendChild(linkNode)
 		if len(altContent) > 0 {
-			linkNode.AppendChild(text(altContent))
+			linkNode.appendChild(text(altContent))
 		} else {
 			// links cannot contain other links, so turn off link parsing
 			// temporarily and recurse
 			insideLink := p.insideLink
 			p.insideLink = true
-			p.inline(linkNode, data[1:txtE])
+			tmpNode := p.currBlock
+			p.currBlock = linkNode
+			p.inline(data[1:txtE])
+			p.currBlock = tmpNode
 			p.insideLink = insideLink
 		}
 
 	case linkImg:
-		linkNode = NewNode(Image)
+		linkNode := NewNode(Image)
 		linkNode.Destination = uLink
 		linkNode.Title = title
-		linkNode.AppendChild(text(data[1:txtE]))
+		p.currBlock.appendChild(linkNode)
+		linkNode.appendChild(text(data[1:txtE]))
 		i++
 
 	case linkInlineFootnote, linkDeferredFootnote:
-		linkNode = NewNode(Link)
+		linkNode := NewNode(Link)
 		linkNode.Destination = link
 		linkNode.Title = title
 		linkNode.NoteID = noteID
-		linkNode.Footnote = footnoteNode
+		p.currBlock.appendChild(linkNode)
 		if t == linkInlineFootnote {
 			i++
 		}
 
 	default:
-		return 0, nil
+		return 0
 	}
 
-	return i, linkNode
+	return i
 }
 
-func (p *Markdown) inlineHTMLComment(data []byte) int {
+func (p *parser) inlineHTMLComment(data []byte) int {
 	if len(data) < 5 {
 		return 0
 	}
@@ -627,7 +649,7 @@ const (
 )
 
 // '<' when tags or autolinks are allowed
-func leftAngle(p *Markdown, data []byte, offset int) (int, *Node) {
+func leftAngle(p *parser, data []byte, offset int) int {
 	data = data[offset:]
 	altype, end := tagLength(data)
 	if size := p.inlineHTMLComment(data); size > 0 {
@@ -644,37 +666,38 @@ func leftAngle(p *Markdown, data []byte, offset int) (int, *Node) {
 				if altype == emailAutolink {
 					node.Destination = append([]byte("mailto:"), link...)
 				}
-				node.AppendChild(text(stripMailto(link)))
-				return end, node
+				p.currBlock.appendChild(node)
+				node.appendChild(text(stripMailto(link)))
 			}
 		} else {
 			htmlTag := NewNode(HTMLSpan)
 			htmlTag.Literal = data[:end]
-			return end, htmlTag
+			p.currBlock.appendChild(htmlTag)
 		}
 	}
 
-	return end, nil
+	return end
 }
 
 // '\\' backslash escape
 var escapeChars = []byte("\\`*_{}[]()#+-.!:|&<>~")
 
-func escape(p *Markdown, data []byte, offset int) (int, *Node) {
+func escape(p *parser, data []byte, offset int) int {
 	data = data[offset:]
 
 	if len(data) > 1 {
-		if p.extensions&BackslashLineBreak != 0 && data[1] == '\n' {
-			return 2, NewNode(Hardbreak)
+		if p.flags&BackslashLineBreak != 0 && data[1] == '\n' {
+			p.currBlock.appendChild(NewNode(Hardbreak))
+			return 2
 		}
 		if bytes.IndexByte(escapeChars, data[1]) < 0 {
-			return 0, nil
+			return 0
 		}
 
-		return 2, text(data[1:2])
+		p.currBlock.appendChild(text(data[1:2]))
 	}
 
-	return 2, nil
+	return 2
 }
 
 func unescapeText(ob *bytes.Buffer, src []byte) {
@@ -700,7 +723,7 @@ func unescapeText(ob *bytes.Buffer, src []byte) {
 
 // '&' escaped when it doesn't belong to an entity
 // valid entities are assumed to be anything matching &#?[A-Za-z0-9]+;
-func entity(p *Markdown, data []byte, offset int) (int, *Node) {
+func entity(p *parser, data []byte, offset int) int {
 	data = data[offset:]
 
 	end := 1
@@ -716,7 +739,7 @@ func entity(p *Markdown, data []byte, offset int) (int, *Node) {
 	if end < len(data) && data[end] == ';' {
 		end++ // real entity
 	} else {
-		return 0, nil // lone '&'
+		return 0 // lone '&'
 	}
 
 	ent := data[:end]
@@ -725,8 +748,9 @@ func entity(p *Markdown, data []byte, offset int) (int, *Node) {
 	if bytes.Equal(ent, []byte("&amp;")) {
 		ent = []byte{'&'}
 	}
+	p.currBlock.appendChild(text(ent))
 
-	return end, text(ent)
+	return end
 }
 
 func linkEndsWithEntity(data []byte, linkEnd int) bool {
@@ -734,52 +758,32 @@ func linkEndsWithEntity(data []byte, linkEnd int) bool {
 	return entityRanges != nil && entityRanges[len(entityRanges)-1][1] == linkEnd
 }
 
-// hasPrefixCaseInsensitive is a custom implementation of
-//     strings.HasPrefix(strings.ToLower(s), prefix)
-// we rolled our own because ToLower pulls in a huge machinery of lowercasing
-// anything from Unicode and that's very slow. Since this func will only be
-// used on ASCII protocol prefixes, we can take shortcuts.
-func hasPrefixCaseInsensitive(s, prefix []byte) bool {
-	if len(s) < len(prefix) {
-		return false
-	}
-	delta := byte('a' - 'A')
-	for i, b := range prefix {
-		if b != s[i] && b != s[i]+delta {
-			return false
-		}
-	}
-	return true
-}
-
-var protocolPrefixes = [][]byte{
-	[]byte("http://"),
-	[]byte("https://"),
-	[]byte("ftp://"),
-	[]byte("file://"),
-	[]byte("mailto:"),
-}
-
-const shortestPrefix = 6 // len("ftp://"), the shortest of the above
-
-func maybeAutoLink(p *Markdown, data []byte, offset int) (int, *Node) {
+func maybeAutoLink(p *parser, data []byte, offset int) int {
 	// quick check to rule out most false hits
-	if p.insideLink || len(data) < offset+shortestPrefix {
-		return 0, nil
+	if p.insideLink || len(data) < offset+6 { // 6 is the len() of the shortest prefix below
+		return 0
 	}
-	for _, prefix := range protocolPrefixes {
+	prefixes := []string{
+		"http://",
+		"https://",
+		"ftp://",
+		"file://",
+		"mailto:",
+	}
+	for _, prefix := range prefixes {
 		endOfHead := offset + 8 // 8 is the len() of the longest prefix
 		if endOfHead > len(data) {
 			endOfHead = len(data)
 		}
-		if hasPrefixCaseInsensitive(data[offset:endOfHead], prefix) {
+		head := bytes.ToLower(data[offset:endOfHead])
+		if bytes.HasPrefix(head, []byte(prefix)) {
 			return autoLink(p, data, offset)
 		}
 	}
-	return 0, nil
+	return 0
 }
 
-func autoLink(p *Markdown, data []byte, offset int) (int, *Node) {
+func autoLink(p *parser, data []byte, offset int) int {
 	// Now a more expensive check to see if we're not inside an anchor element
 	anchorStart := offset
 	offsetFromAnchor := 0
@@ -792,7 +796,8 @@ func autoLink(p *Markdown, data []byte, offset int) (int, *Node) {
 	if anchorStr != nil {
 		anchorClose := NewNode(HTMLSpan)
 		anchorClose.Literal = anchorStr[offsetFromAnchor:]
-		return len(anchorStr) - offsetFromAnchor, anchorClose
+		p.currBlock.appendChild(anchorClose)
+		return len(anchorStr) - offsetFromAnchor
 	}
 
 	// scan backward for a word boundary
@@ -801,14 +806,14 @@ func autoLink(p *Markdown, data []byte, offset int) (int, *Node) {
 		rewind++
 	}
 	if rewind > 6 { // longest supported protocol is "mailto" which has 6 letters
-		return 0, nil
+		return 0
 	}
 
 	origData := data
 	data = data[offset-rewind:]
 
 	if !isSafeLink(data) {
-		return 0, nil
+		return 0
 	}
 
 	linkEnd := 0
@@ -891,11 +896,11 @@ func autoLink(p *Markdown, data []byte, offset int) (int, *Node) {
 	if uLink.Len() > 0 {
 		node := NewNode(Link)
 		node.Destination = uLink.Bytes()
-		node.AppendChild(text(uLink.Bytes()))
-		return linkEnd, node
+		p.currBlock.appendChild(node)
+		node.appendChild(text(uLink.Bytes()))
 	}
 
-	return linkEnd, nil
+	return linkEnd
 }
 
 func isEndOfLink(char byte) bool {
@@ -1109,7 +1114,7 @@ func helperFindEmphChar(data []byte, c byte) int {
 	return 0
 }
 
-func helperEmphasis(p *Markdown, data []byte, c byte) (int, *Node) {
+func helperEmphasis(p *parser, data []byte, c byte) int {
 	i := 0
 
 	// skip one symbol if coming from emph3
@@ -1120,11 +1125,11 @@ func helperEmphasis(p *Markdown, data []byte, c byte) (int, *Node) {
 	for i < len(data) {
 		length := helperFindEmphChar(data[i:], c)
 		if length == 0 {
-			return 0, nil
+			return 0
 		}
 		i += length
 		if i >= len(data) {
-			return 0, nil
+			return 0
 		}
 
 		if i+1 < len(data) && data[i+1] == c {
@@ -1134,28 +1139,32 @@ func helperEmphasis(p *Markdown, data []byte, c byte) (int, *Node) {
 
 		if data[i] == c && !isspace(data[i-1]) {
 
-			if p.extensions&NoIntraEmphasis != 0 {
+			if p.flags&NoIntraEmphasis != 0 {
 				if !(i+1 == len(data) || isspace(data[i+1]) || ispunct(data[i+1])) {
 					continue
 				}
 			}
 
 			emph := NewNode(Emph)
-			p.inline(emph, data[:i])
-			return i + 1, emph
+			p.currBlock.appendChild(emph)
+			tmp := p.currBlock
+			p.currBlock = emph
+			p.inline(data[:i])
+			p.currBlock = tmp
+			return i + 1
 		}
 	}
 
-	return 0, nil
+	return 0
 }
 
-func helperDoubleEmphasis(p *Markdown, data []byte, c byte) (int, *Node) {
+func helperDoubleEmphasis(p *parser, data []byte, c byte) int {
 	i := 0
 
 	for i < len(data) {
 		length := helperFindEmphChar(data[i:], c)
 		if length == 0 {
-			return 0, nil
+			return 0
 		}
 		i += length
 
@@ -1165,15 +1174,19 @@ func helperDoubleEmphasis(p *Markdown, data []byte, c byte) (int, *Node) {
 				nodeType = Del
 			}
 			node := NewNode(nodeType)
-			p.inline(node, data[:i])
-			return i + 2, node
+			p.currBlock.appendChild(node)
+			tmp := p.currBlock
+			p.currBlock = node
+			p.inline(data[:i])
+			p.currBlock = tmp
+			return i + 2
 		}
 		i++
 	}
-	return 0, nil
+	return 0
 }
 
-func helperTripleEmphasis(p *Markdown, data []byte, offset int, c byte) (int, *Node) {
+func helperTripleEmphasis(p *parser, data []byte, offset int, c byte) int {
 	i := 0
 	origData := data
 	data = data[offset:]
@@ -1181,7 +1194,7 @@ func helperTripleEmphasis(p *Markdown, data []byte, offset int, c byte) (int, *N
 	for i < len(data) {
 		length := helperFindEmphChar(data[i:], c)
 		if length == 0 {
-			return 0, nil
+			return 0
 		}
 		i += length
 
@@ -1195,26 +1208,59 @@ func helperTripleEmphasis(p *Markdown, data []byte, offset int, c byte) (int, *N
 			// triple symbol found
 			strong := NewNode(Strong)
 			em := NewNode(Emph)
-			strong.AppendChild(em)
-			p.inline(em, data[:i])
-			return i + 3, strong
+			strong.appendChild(em)
+			p.currBlock.appendChild(strong)
+			tmp := p.currBlock
+			p.currBlock = em
+			p.inline(data[:i])
+			p.currBlock = tmp
+			return i + 3
 		case (i+1 < len(data) && data[i+1] == c):
 			// double symbol found, hand over to emph1
-			length, node := helperEmphasis(p, origData[offset-2:], c)
+			length = helperEmphasis(p, origData[offset-2:], c)
 			if length == 0 {
-				return 0, nil
+				return 0
 			}
-			return length - 2, node
+			return length - 2
 		default:
 			// single symbol found, hand over to emph2
-			length, node := helperDoubleEmphasis(p, origData[offset-1:], c)
+			length = helperDoubleEmphasis(p, origData[offset-1:], c)
 			if length == 0 {
-				return 0, nil
+				return 0
 			}
-			return length - 1, node
+			return length - 1
 		}
 	}
-	return 0, nil
+	return 0
+}
+
+// LaTeX math surrounded by '$' or '$$'
+func math(p *parser, data []byte, offset int) int {
+	data = data[offset:]
+
+	// inline math
+	if len(data) > 2 && data[1] != '$' {
+		// find the next '$'
+		end := 1
+		for end < len(data) && data[end] != '$' {
+			end++
+		}
+
+		// no matching delimiter?
+		if end == len(data) {
+			return 0
+		}
+
+		// render the inline math
+		if end != 0 {
+			math := NewNode(Math)
+			math.Literal = data[1:end]
+			p.currBlock.appendChild(math)
+		}
+		return end + 1
+	}
+
+	return 0
 }
 
 func text(s []byte) *Node {

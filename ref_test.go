@@ -20,7 +20,6 @@ import (
 )
 
 func TestReference(t *testing.T) {
-	t.Parallel()
 	files := []string{
 		"Amps and angle encoding",
 		"Auto links",
@@ -49,7 +48,6 @@ func TestReference(t *testing.T) {
 }
 
 func TestReference_EXTENSION_NO_EMPTY_LINE_BEFORE_BLOCK(t *testing.T) {
-	t.Parallel()
 	files := []string{
 		"Amps and angle encoding",
 		"Auto links",
@@ -82,7 +80,7 @@ func TestReference_EXTENSION_NO_EMPTY_LINE_BEFORE_BLOCK(t *testing.T) {
 var benchResultAnchor string
 
 func BenchmarkReference(b *testing.B) {
-	params := TestParams{extensions: CommonExtensions}
+	params := TestParams{Options: Options{Extensions: CommonExtensions}}
 	files := []string{
 		"Amps and angle encoding",
 		"Auto links",

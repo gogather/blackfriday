@@ -18,6 +18,7 @@ package blackfriday
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"io"
 	"regexp"
 	"strings"
@@ -28,48 +29,39 @@ type HTMLFlags int
 
 // HTML renderer configuration options.
 const (
-	HTMLFlagsNone           HTMLFlags = 0
-	SkipHTML                HTMLFlags = 1 << iota // Skip preformatted HTML blocks
-	SkipImages                                    // Skip embedded images
-	SkipLinks                                     // Skip all links
-	Safelink                                      // Only link to trusted protocols
-	NofollowLinks                                 // Only link with rel="nofollow"
-	NoreferrerLinks                               // Only link with rel="noreferrer"
-	NoopenerLinks                                 // Only link with rel="noopener"
-	HrefTargetBlank                               // Add a blank target
-	CompletePage                                  // Generate a complete HTML page
-	UseXHTML                                      // Generate XHTML output instead of HTML
-	FootnoteReturnLinks                           // Generate a link at the end of a footnote to return to the source
-	Smartypants                                   // Enable smart punctuation substitutions
-	SmartypantsFractions                          // Enable smart fractions (with Smartypants)
-	SmartypantsDashes                             // Enable smart dashes (with Smartypants)
-	SmartypantsLatexDashes                        // Enable LaTeX-style dashes (with Smartypants)
-	SmartypantsAngledQuotes                       // Enable angled double quotes (with Smartypants) for double quotes rendering
-	SmartypantsQuotesNBSP                         // Enable « French guillemets » (with Smartypants)
-	TOC                                           // Generate a table of contents
+	HTMLFlagsNone       HTMLFlags = 0
+	SkipHTML            HTMLFlags = 1 << iota // Skip preformatted HTML blocks
+	SkipStyle                                 // Skip embedded <style> elements
+	SkipImages                                // Skip embedded images
+	SkipLinks                                 // Skip all links
+	Safelink                                  // Only link to trusted protocols
+	NofollowLinks                             // Only link with rel="nofollow"
+	NoreferrerLinks                           // Only link with rel="noreferrer"
+	HrefTargetBlank                           // Add a blank target
+	CompletePage                              // Generate a complete HTML page
+	UseXHTML                                  // Generate XHTML output instead of HTML
+	FootnoteReturnLinks                       // Generate a link at the end of a footnote to return to the source
+
+	TagName               = "[A-Za-z][A-Za-z0-9-]*"
+	AttributeName         = "[a-zA-Z_:][a-zA-Z0-9:._-]*"
+	UnquotedValue         = "[^\"'=<>`\\x00-\\x20]+"
+	SingleQuotedValue     = "'[^']*'"
+	DoubleQuotedValue     = "\"[^\"]*\""
+	AttributeValue        = "(?:" + UnquotedValue + "|" + SingleQuotedValue + "|" + DoubleQuotedValue + ")"
+	AttributeValueSpec    = "(?:" + "\\s*=" + "\\s*" + AttributeValue + ")"
+	Attribute             = "(?:" + "\\s+" + AttributeName + AttributeValueSpec + "?)"
+	OpenTag               = "<" + TagName + Attribute + "*" + "\\s*/?>"
+	CloseTag              = "</" + TagName + "\\s*[>]"
+	HTMLComment           = "<!---->|<!--(?:-?[^>-])(?:-?[^-])*-->"
+	ProcessingInstruction = "[<][?].*?[?][>]"
+	Declaration           = "<![A-Z]+" + "\\s+[^>]*>"
+	CDATA                 = "<!\\[CDATA\\[[\\s\\S]*?\\]\\]>"
+	HTMLTag               = "(?:" + OpenTag + "|" + CloseTag + "|" + HTMLComment + "|" +
+		ProcessingInstruction + "|" + Declaration + "|" + CDATA + ")"
 )
 
 var (
-	htmlTagRe = regexp.MustCompile("(?i)^" + htmlTag)
-)
-
-const (
-	htmlTag = "(?:" + openTag + "|" + closeTag + "|" + htmlComment + "|" +
-		processingInstruction + "|" + declaration + "|" + cdata + ")"
-	closeTag              = "</" + tagName + "\\s*[>]"
-	openTag               = "<" + tagName + attribute + "*" + "\\s*/?>"
-	attribute             = "(?:" + "\\s+" + attributeName + attributeValueSpec + "?)"
-	attributeValue        = "(?:" + unquotedValue + "|" + singleQuotedValue + "|" + doubleQuotedValue + ")"
-	attributeValueSpec    = "(?:" + "\\s*=" + "\\s*" + attributeValue + ")"
-	attributeName         = "[a-zA-Z_:][a-zA-Z0-9:._-]*"
-	cdata                 = "<!\\[CDATA\\[[\\s\\S]*?\\]\\]>"
-	declaration           = "<![A-Z]+" + "\\s+[^>]*>"
-	doubleQuotedValue     = "\"[^\"]*\""
-	htmlComment           = "<!---->|<!--(?:-?[^>-])(?:-?[^-])*-->"
-	processingInstruction = "[<][?].*?[?][>]"
-	singleQuotedValue     = "'[^']*'"
-	tagName               = "[A-Za-z][A-Za-z0-9-]*"
-	unquotedValue         = "[^\"'=<>`\\x00-\\x20]+"
+	htmlTagRe = regexp.MustCompile("(?i)^" + HTMLTag)
 )
 
 // HTMLRendererParameters is a collection of supplementary parameters tweaking
@@ -83,21 +75,17 @@ type HTMLRendererParameters struct {
 	// HTML_FOOTNOTE_RETURN_LINKS flag is enabled. If blank, the string
 	// <sup>[return]</sup> is used.
 	FootnoteReturnLinkContents string
-	// If set, add this text to the front of each Heading ID, to ensure
+	// If set, add this text to the front of each Header ID, to ensure
 	// uniqueness.
-	HeadingIDPrefix string
-	// If set, add this text to the back of each Heading ID, to ensure uniqueness.
-	HeadingIDSuffix string
-	// Increase heading levels: if the offset is 1, <h1> becomes <h2> etc.
-	// Negative offset is also valid.
-	// Resulting levels are clipped between 1 and 6.
-	HeadingLevelOffset int
+	HeaderIDPrefix string
+	// If set, add this text to the back of each Header ID, to ensure uniqueness.
+	HeaderIDSuffix string
 
 	Title string // Document title (used if CompletePage is set)
 	CSS   string // Optional CSS file URL (used if CompletePage is set)
-	Icon  string // Optional icon file URL (used if CompletePage is set)
 
-	Flags HTMLFlags // Flags allow customizing this renderer's behavior
+	Flags      HTMLFlags  // Flags allow customizing this renderer's behavior
+	Extensions Extensions // Extensions give Smartypants and HTML renderer access to Blackfriday's global extensions
 }
 
 // HTMLRenderer is a type that implements the Renderer interface for HTML output.
@@ -108,13 +96,11 @@ type HTMLRenderer struct {
 
 	closeTag string // how to end singleton tags: either " />" or ">"
 
-	// Track heading IDs to prevent ID collision in a single generation.
-	headingIDs map[string]int
+	// Track header IDs to prevent ID collision in a single generation.
+	headerIDs map[string]int
 
 	lastOutputLen int
 	disableTags   int
-
-	sr *SPRenderer
 }
 
 const (
@@ -132,19 +118,14 @@ func NewHTMLRenderer(params HTMLRendererParameters) *HTMLRenderer {
 	}
 
 	if params.FootnoteReturnLinkContents == "" {
-		// U+FE0E is VARIATION SELECTOR-15.
-		// It suppresses automatic emoji presentation of the preceding
-		// U+21A9 LEFTWARDS ARROW WITH HOOK on iOS and iPadOS.
-		params.FootnoteReturnLinkContents = "<span aria-label='Return'>↩\ufe0e</span>"
+		params.FootnoteReturnLinkContents = `<sup>[return]</sup>`
 	}
 
 	return &HTMLRenderer{
 		HTMLRendererParameters: params,
 
-		closeTag:   closeTag,
-		headingIDs: make(map[string]int),
-
-		sr: NewSmartypantsRenderer(params.Flags),
+		closeTag:  closeTag,
+		headerIDs: make(map[string]int),
 	}
 }
 
@@ -248,20 +229,20 @@ func isRelativeLink(link []byte) (yes bool) {
 	return false
 }
 
-func (r *HTMLRenderer) ensureUniqueHeadingID(id string) string {
-	for count, found := r.headingIDs[id]; found; count, found = r.headingIDs[id] {
+func (r *HTMLRenderer) ensureUniqueHeaderID(id string) string {
+	for count, found := r.headerIDs[id]; found; count, found = r.headerIDs[id] {
 		tmp := fmt.Sprintf("%s-%d", id, count+1)
 
-		if _, tmpFound := r.headingIDs[tmp]; !tmpFound {
-			r.headingIDs[id] = count + 1
+		if _, tmpFound := r.headerIDs[tmp]; !tmpFound {
+			r.headerIDs[id] = count + 1
 			id = tmp
 		} else {
 			id = id + "-1"
 		}
 	}
 
-	if _, found := r.headingIDs[id]; !found {
-		r.headingIDs[id] = 0
+	if _, found := r.headerIDs[id]; !found {
+		r.headerIDs[id] = 0
 	}
 
 	return id
@@ -290,9 +271,6 @@ func appendLinkAttrs(attrs []string, flags HTMLFlags, link []byte) []string {
 	if flags&NoreferrerLinks != 0 {
 		val = append(val, "noreferrer")
 	}
-	if flags&NoopenerLinks != 0 {
-		val = append(val, "noopener")
-	}
 	if flags&HrefTargetBlank != 0 {
 		attrs = append(attrs, "target=\"_blank\"")
 	}
@@ -320,29 +298,27 @@ func isSmartypantable(node *Node) bool {
 }
 
 func appendLanguageAttr(attrs []string, info []byte) []string {
-	if len(info) == 0 {
-		return attrs
+	infoWords := bytes.Split(info, []byte("\t "))
+	if len(infoWords) > 0 && len(infoWords[0]) > 0 {
+		attrs = append(attrs, fmt.Sprintf("class=\"language-%s\"", infoWords[0]))
 	}
-	endOfLang := bytes.IndexAny(info, "\t ")
-	if endOfLang < 0 {
-		endOfLang = len(info)
-	}
-	return append(attrs, fmt.Sprintf("class=\"language-%s\"", info[:endOfLang]))
+	return attrs
 }
 
-func (r *HTMLRenderer) tag(w io.Writer, name []byte, attrs []string) {
-	w.Write(name)
-	if len(attrs) > 0 {
-		w.Write(spaceBytes)
-		w.Write([]byte(strings.Join(attrs, " ")))
+func tag(name string, attrs []string, selfClosing bool) []byte {
+	result := "<" + name
+	if attrs != nil && len(attrs) > 0 {
+		result += " " + strings.Join(attrs, " ")
 	}
-	w.Write(gtBytes)
-	r.lastOutputLen = 1
+	if selfClosing {
+		result += " /"
+	}
+	return []byte(result + ">")
 }
 
 func footnoteRef(prefix string, node *Node) []byte {
 	urlFrag := prefix + string(slugify(node.Destination))
-	anchor := fmt.Sprintf(`<a href="#fn:%s">%d</a>`, urlFrag, node.NoteID)
+	anchor := fmt.Sprintf(`<a rel="footnote" href="#fn:%s">%d</a>`, urlFrag, node.NoteID)
 	return []byte(fmt.Sprintf(`<sup class="footnote-ref" id="fnref:%s">%s</sup>`, urlFrag, anchor))
 }
 
@@ -385,6 +361,17 @@ func cellAlignment(align CellAlignFlags) string {
 	}
 }
 
+func esc(text []byte) []byte {
+	unesc := []byte(html.UnescapeString(string(text)))
+	return escCode(unesc)
+}
+
+func escCode(text []byte) []byte {
+	e1 := []byte(html.EscapeString(string(text)))
+	e2 := bytes.Replace(e1, []byte("&#34;"), []byte("&quot;"), -1)
+	return bytes.Replace(e2, []byte("&#39;"), []byte{'\''}, -1)
+}
+
 func (r *HTMLRenderer) out(w io.Writer, text []byte) {
 	if r.disableTags > 0 {
 		w.Write(htmlTagRe.ReplaceAll(text, []byte{}))
@@ -396,102 +383,7 @@ func (r *HTMLRenderer) out(w io.Writer, text []byte) {
 
 func (r *HTMLRenderer) cr(w io.Writer) {
 	if r.lastOutputLen > 0 {
-		r.out(w, nlBytes)
-	}
-}
-
-var (
-	nlBytes    = []byte{'\n'}
-	gtBytes    = []byte{'>'}
-	spaceBytes = []byte{' '}
-)
-
-var (
-	brTag              = []byte("<br>")
-	brXHTMLTag         = []byte("<br />")
-	emTag              = []byte("<em>")
-	emCloseTag         = []byte("</em>")
-	strongTag          = []byte("<strong>")
-	strongCloseTag     = []byte("</strong>")
-	delTag             = []byte("<del>")
-	delCloseTag        = []byte("</del>")
-	ttTag              = []byte("<tt>")
-	ttCloseTag         = []byte("</tt>")
-	aTag               = []byte("<a")
-	aCloseTag          = []byte("</a>")
-	preTag             = []byte("<pre>")
-	preCloseTag        = []byte("</pre>")
-	codeTag            = []byte("<code>")
-	codeCloseTag       = []byte("</code>")
-	pTag               = []byte("<p>")
-	pCloseTag          = []byte("</p>")
-	blockquoteTag      = []byte("<blockquote>")
-	blockquoteCloseTag = []byte("</blockquote>")
-	hrTag              = []byte("<hr>")
-	hrXHTMLTag         = []byte("<hr />")
-	ulTag              = []byte("<ul>")
-	ulCloseTag         = []byte("</ul>")
-	olTag              = []byte("<ol>")
-	olCloseTag         = []byte("</ol>")
-	dlTag              = []byte("<dl>")
-	dlCloseTag         = []byte("</dl>")
-	liTag              = []byte("<li>")
-	liCloseTag         = []byte("</li>")
-	ddTag              = []byte("<dd>")
-	ddCloseTag         = []byte("</dd>")
-	dtTag              = []byte("<dt>")
-	dtCloseTag         = []byte("</dt>")
-	tableTag           = []byte("<table>")
-	tableCloseTag      = []byte("</table>")
-	tdTag              = []byte("<td")
-	tdCloseTag         = []byte("</td>")
-	thTag              = []byte("<th")
-	thCloseTag         = []byte("</th>")
-	theadTag           = []byte("<thead>")
-	theadCloseTag      = []byte("</thead>")
-	tbodyTag           = []byte("<tbody>")
-	tbodyCloseTag      = []byte("</tbody>")
-	trTag              = []byte("<tr>")
-	trCloseTag         = []byte("</tr>")
-	h1Tag              = []byte("<h1")
-	h1CloseTag         = []byte("</h1>")
-	h2Tag              = []byte("<h2")
-	h2CloseTag         = []byte("</h2>")
-	h3Tag              = []byte("<h3")
-	h3CloseTag         = []byte("</h3>")
-	h4Tag              = []byte("<h4")
-	h4CloseTag         = []byte("</h4>")
-	h5Tag              = []byte("<h5")
-	h5CloseTag         = []byte("</h5>")
-	h6Tag              = []byte("<h6")
-	h6CloseTag         = []byte("</h6>")
-
-	footnotesDivBytes      = []byte("\n<div class=\"footnotes\">\n\n")
-	footnotesCloseDivBytes = []byte("\n</div>\n")
-)
-
-func headingTagsFromLevel(level int) ([]byte, []byte) {
-	if level <= 1 {
-		return h1Tag, h1CloseTag
-	}
-	switch level {
-	case 2:
-		return h2Tag, h2CloseTag
-	case 3:
-		return h3Tag, h3CloseTag
-	case 4:
-		return h4Tag, h4CloseTag
-	case 5:
-		return h5Tag, h5CloseTag
-	}
-	return h6Tag, h6CloseTag
-}
-
-func (r *HTMLRenderer) outHRTag(w io.Writer) {
-	if r.Flags&UseXHTML == 0 {
-		r.out(w, hrTag)
-	} else {
-		r.out(w, hrXHTMLTag)
+		r.out(w, []byte{'\n'})
 	}
 }
 
@@ -509,85 +401,75 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 	attrs := []string{}
 	switch node.Type {
 	case Text:
-		if r.Flags&Smartypants != 0 {
-			var tmp bytes.Buffer
-			escapeHTML(&tmp, node.Literal)
-			r.sr.Process(w, tmp.Bytes())
-		} else {
-			if node.Parent.Type == Link {
-				escLink(w, node.Literal)
-			} else {
-				escapeHTML(w, node.Literal)
-			}
-		}
+		r.out(w, node.Literal)
+		break
 	case Softbreak:
-		r.cr(w)
+		r.out(w, []byte("\n"))
 		// TODO: make it configurable via out(renderer.softbreak)
 	case Hardbreak:
-		if r.Flags&UseXHTML == 0 {
-			r.out(w, brTag)
-		} else {
-			r.out(w, brXHTMLTag)
-		}
+		r.out(w, tag("br", nil, true))
 		r.cr(w)
 	case Emph:
 		if entering {
-			r.out(w, emTag)
+			r.out(w, tag("em", nil, false))
 		} else {
-			r.out(w, emCloseTag)
+			r.out(w, tag("/em", nil, false))
 		}
+		break
 	case Strong:
 		if entering {
-			r.out(w, strongTag)
+			r.out(w, tag("strong", nil, false))
 		} else {
-			r.out(w, strongCloseTag)
+			r.out(w, tag("/strong", nil, false))
 		}
+		break
 	case Del:
 		if entering {
-			r.out(w, delTag)
+			r.out(w, tag("del", nil, false))
 		} else {
-			r.out(w, delCloseTag)
+			r.out(w, tag("/del", nil, false))
 		}
 	case HTMLSpan:
 		if r.Flags&SkipHTML != 0 {
 			break
 		}
+		if r.Flags&SkipStyle != 0 && isHTMLTag(node.Literal, "style") {
+			break
+		}
+		//if options.safe {
+		//	out(w, "<!-- raw HTML omitted -->")
+		//} else {
 		r.out(w, node.Literal)
+		//}
 	case Link:
 		// mark it but don't link it if it is not a safe link: no smartypants
 		dest := node.LinkData.Destination
 		if needSkipLink(r.Flags, dest) {
 			if entering {
-				r.out(w, ttTag)
+				r.out(w, tag("tt", nil, false))
 			} else {
-				r.out(w, ttCloseTag)
+				r.out(w, tag("/tt", nil, false))
 			}
 		} else {
 			if entering {
 				dest = r.addAbsPrefix(dest)
-				var hrefBuf bytes.Buffer
-				hrefBuf.WriteString("href=\"")
-				escLink(&hrefBuf, dest)
-				hrefBuf.WriteByte('"')
-				attrs = append(attrs, hrefBuf.String())
+				//if (!(options.safe && potentiallyUnsafe(node.destination))) {
+				attrs = append(attrs, fmt.Sprintf("href=%q", esc(dest)))
+				//}
 				if node.NoteID != 0 {
 					r.out(w, footnoteRef(r.FootnoteAnchorPrefix, node))
 					break
 				}
 				attrs = appendLinkAttrs(attrs, r.Flags, dest)
 				if len(node.LinkData.Title) > 0 {
-					var titleBuff bytes.Buffer
-					titleBuff.WriteString("title=\"")
-					escapeHTML(&titleBuff, node.LinkData.Title)
-					titleBuff.WriteByte('"')
-					attrs = append(attrs, titleBuff.String())
+					attrs = append(attrs, fmt.Sprintf("title=%q", esc(node.LinkData.Title)))
 				}
-				r.tag(w, aTag, attrs)
+				r.out(w, tag("a", attrs, false))
 			} else {
 				if node.NoteID != 0 {
 					break
 				}
-				r.out(w, aCloseTag)
+				r.out(w, tag("/a", nil, false))
 			}
 		}
 	case Image:
@@ -601,9 +483,7 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 				//if options.safe && potentiallyUnsafe(dest) {
 				//out(w, `<img src="" alt="`)
 				//} else {
-				r.out(w, []byte(`<img src="`))
-				escLink(w, dest)
-				r.out(w, []byte(`" alt="`))
+				r.out(w, []byte(fmt.Sprintf(`<img src="%s" alt="`, esc(dest))))
 				//}
 			}
 			r.disableTags++
@@ -612,15 +492,15 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			if r.disableTags == 0 {
 				if node.LinkData.Title != nil {
 					r.out(w, []byte(`" title="`))
-					escapeHTML(w, node.LinkData.Title)
+					r.out(w, esc(node.LinkData.Title))
 				}
 				r.out(w, []byte(`" />`))
 			}
 		}
 	case Code:
-		r.out(w, codeTag)
-		escapeAllHTML(w, node.Literal)
-		r.out(w, codeCloseTag)
+		r.out(w, tag("code", nil, false))
+		r.out(w, escCode(node.Literal))
+		r.out(w, tag("/code", nil, false))
 	case Document:
 		break
 	case Paragraph:
@@ -631,29 +511,31 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			// TODO: untangle this clusterfuck about when the newlines need
 			// to be added and when not.
 			if node.Prev != nil {
-				switch node.Prev.Type {
-				case HTMLBlock, List, Paragraph, Heading, CodeBlock, BlockQuote, HorizontalRule:
+				t := node.Prev.Type
+				if t == HTMLBlock || t == List || t == Paragraph || t == Header || t == CodeBlock || t == BlockQuote || t == HorizontalRule {
 					r.cr(w)
 				}
 			}
 			if node.Parent.Type == BlockQuote && node.Prev == nil {
 				r.cr(w)
 			}
-			r.out(w, pTag)
+			r.out(w, tag("p", attrs, false))
 		} else {
-			r.out(w, pCloseTag)
+			r.out(w, tag("/p", attrs, false))
 			if !(node.Parent.Type == Item && node.Next == nil) {
 				r.cr(w)
 			}
 		}
+		break
 	case BlockQuote:
 		if entering {
 			r.cr(w)
-			r.out(w, blockquoteTag)
+			r.out(w, tag("blockquote", attrs, false))
 		} else {
-			r.out(w, blockquoteCloseTag)
+			r.out(w, tag("/blockquote", nil, false))
 			r.cr(w)
 		}
+		break
 	case HTMLBlock:
 		if r.Flags&SkipHTML != 0 {
 			break
@@ -661,60 +543,57 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 		r.cr(w)
 		r.out(w, node.Literal)
 		r.cr(w)
-	case Heading:
-		headingLevel := r.HTMLRendererParameters.HeadingLevelOffset + node.Level
-		openTag, closeTag := headingTagsFromLevel(headingLevel)
+	case Header:
+		tagname := fmt.Sprintf("h%d", node.Level)
 		if entering {
 			if node.IsTitleblock {
 				attrs = append(attrs, `class="title"`)
 			}
-			if node.HeadingID != "" {
-				id := r.ensureUniqueHeadingID(node.HeadingID)
-				if r.HeadingIDPrefix != "" {
-					id = r.HeadingIDPrefix + id
+			if node.HeaderID != "" {
+				id := r.ensureUniqueHeaderID(node.HeaderID)
+				if r.HeaderIDPrefix != "" {
+					id = r.HeaderIDPrefix + id
 				}
-				if r.HeadingIDSuffix != "" {
-					id = id + r.HeadingIDSuffix
+				if r.HeaderIDSuffix != "" {
+					id = id + r.HeaderIDSuffix
 				}
 				attrs = append(attrs, fmt.Sprintf(`id="%s"`, id))
 			}
 			r.cr(w)
-			r.tag(w, openTag, attrs)
+			r.out(w, tag(tagname, attrs, false))
 		} else {
-			r.out(w, closeTag)
+			r.out(w, tag("/"+tagname, nil, false))
 			if !(node.Parent.Type == Item && node.Next == nil) {
 				r.cr(w)
 			}
 		}
+		break
 	case HorizontalRule:
 		r.cr(w)
-		r.outHRTag(w)
+		r.out(w, tag("hr", attrs, r.Flags&UseXHTML != 0))
 		r.cr(w)
+		break
 	case List:
-		openTag := ulTag
-		closeTag := ulCloseTag
+		tagName := "ul"
 		if node.ListFlags&ListTypeOrdered != 0 {
-			openTag = olTag
-			closeTag = olCloseTag
+			tagName = "ol"
 		}
 		if node.ListFlags&ListTypeDefinition != 0 {
-			openTag = dlTag
-			closeTag = dlCloseTag
+			tagName = "dl"
 		}
 		if entering {
-			if node.IsFootnotesList {
-				r.out(w, footnotesDivBytes)
-				r.outHRTag(w)
-				r.cr(w)
-			}
+			// var start = node.listStart;
+			// if (start !== null && start !== 1) {
+			//     attrs.push(['start', start.toString()]);
+			// }
 			r.cr(w)
 			if node.Parent.Type == Item && node.Parent.Parent.Tight {
 				r.cr(w)
 			}
-			r.tag(w, openTag[:len(openTag)-1], attrs)
+			r.out(w, tag(tagName, attrs, false))
 			r.cr(w)
 		} else {
-			r.out(w, closeTag)
+			r.out(w, tag("/"+tagName, nil, false))
 			//cr(w)
 			//if node.parent.Type != Item {
 			//	cr(w)
@@ -725,20 +604,14 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			if node.Parent.Type == Document || node.Parent.Type == BlockQuote {
 				r.cr(w)
 			}
-			if node.IsFootnotesList {
-				r.out(w, footnotesCloseDivBytes)
-			}
 		}
 	case Item:
-		openTag := liTag
-		closeTag := liCloseTag
+		tagName := "li"
 		if node.ListFlags&ListTypeDefinition != 0 {
-			openTag = ddTag
-			closeTag = ddCloseTag
+			tagName = "dd"
 		}
 		if node.ListFlags&ListTypeTerm != 0 {
-			openTag = dtTag
-			closeTag = dtCloseTag
+			tagName = "dt"
 		}
 		if entering {
 			if itemOpenCR(node) {
@@ -749,7 +622,7 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 				r.out(w, footnoteItem(r.FootnoteAnchorPrefix, slug))
 				break
 			}
-			r.out(w, openTag)
+			r.out(w, tag(tagName, nil, false))
 		} else {
 			if node.ListData.RefLink != nil {
 				slug := slugify(node.ListData.RefLink)
@@ -757,34 +630,32 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 					r.out(w, footnoteReturnLink(r.FootnoteAnchorPrefix, r.FootnoteReturnLinkContents, slug))
 				}
 			}
-			r.out(w, closeTag)
+			r.out(w, tag("/"+tagName, nil, false))
 			r.cr(w)
 		}
 	case CodeBlock:
 		attrs = appendLanguageAttr(attrs, node.Info)
 		r.cr(w)
-		r.out(w, preTag)
-		r.tag(w, codeTag[:len(codeTag)-1], attrs)
-		escapeAllHTML(w, node.Literal)
-		r.out(w, codeCloseTag)
-		r.out(w, preCloseTag)
+		r.out(w, tag("pre", nil, false))
+		r.out(w, tag("code", attrs, false))
+		r.out(w, escCode(node.Literal))
+		r.out(w, tag("/code", nil, false))
+		r.out(w, tag("/pre", nil, false))
 		if node.Parent.Type != Item {
 			r.cr(w)
 		}
 	case Table:
 		if entering {
 			r.cr(w)
-			r.out(w, tableTag)
+			r.out(w, tag("table", nil, false))
 		} else {
-			r.out(w, tableCloseTag)
+			r.out(w, tag("/table", nil, false))
 			r.cr(w)
 		}
 	case TableCell:
-		openTag := tdTag
-		closeTag := tdCloseTag
+		tagName := "td"
 		if node.IsHeader {
-			openTag = thTag
-			closeTag = thCloseTag
+			tagName = "th"
 		}
 		if entering {
 			align := cellAlignment(node.Align)
@@ -794,159 +665,124 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			if node.Prev == nil {
 				r.cr(w)
 			}
-			r.tag(w, openTag, attrs)
+			r.out(w, tag(tagName, attrs, false))
 		} else {
-			r.out(w, closeTag)
+			r.out(w, tag("/"+tagName, nil, false))
 			r.cr(w)
 		}
 	case TableHead:
 		if entering {
 			r.cr(w)
-			r.out(w, theadTag)
+			r.out(w, tag("thead", nil, false))
 		} else {
-			r.out(w, theadCloseTag)
+			r.out(w, tag("/thead", nil, false))
 			r.cr(w)
 		}
 	case TableBody:
 		if entering {
 			r.cr(w)
-			r.out(w, tbodyTag)
+			r.out(w, tag("tbody", nil, false))
 			// XXX: this is to adhere to a rather silly test. Should fix test.
 			if node.FirstChild == nil {
 				r.cr(w)
 			}
 		} else {
-			r.out(w, tbodyCloseTag)
+			r.out(w, tag("/tbody", nil, false))
 			r.cr(w)
 		}
 	case TableRow:
 		if entering {
 			r.cr(w)
-			r.out(w, trTag)
+			r.out(w, tag("tr", nil, false))
 		} else {
-			r.out(w, trCloseTag)
+			r.out(w, tag("/tr", nil, false))
 			r.cr(w)
 		}
+	case Math:
+		r.out(w, []byte("\\("))
+		r.out(w, escCode(node.Literal))
+		r.out(w, []byte("\\)"))
+	case MathBlock:
+		r.out(w, []byte("\\["))
+		r.out(w, escCode(node.Literal))
+		r.out(w, []byte("\\]"))
+		r.cr(w)
+
 	default:
 		panic("Unknown node type " + node.Type.String())
 	}
 	return GoToNext
 }
 
-// RenderHeader writes HTML document preamble and TOC if requested.
-func (r *HTMLRenderer) RenderHeader(w io.Writer, ast *Node) {
-	r.writeDocumentHeader(w)
-	if r.Flags&TOC != 0 {
-		r.writeTOC(w, ast)
-	}
-}
-
-// RenderFooter writes HTML document footer.
-func (r *HTMLRenderer) RenderFooter(w io.Writer, ast *Node) {
-	if r.Flags&CompletePage == 0 {
-		return
-	}
-	io.WriteString(w, "\n</body>\n</html>\n")
-}
-
-func (r *HTMLRenderer) writeDocumentHeader(w io.Writer) {
+func (r *HTMLRenderer) writeDocumentHeader(w *bytes.Buffer, sr *SPRenderer) {
 	if r.Flags&CompletePage == 0 {
 		return
 	}
 	ending := ""
 	if r.Flags&UseXHTML != 0 {
-		io.WriteString(w, "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" ")
-		io.WriteString(w, "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n")
-		io.WriteString(w, "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n")
+		w.WriteString("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" ")
+		w.WriteString("\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n")
+		w.WriteString("<html xmlns=\"http://www.w3.org/1999/xhtml\">\n")
 		ending = " /"
 	} else {
-		io.WriteString(w, "<!DOCTYPE html>\n")
-		io.WriteString(w, "<html>\n")
+		w.WriteString("<!DOCTYPE html>\n")
+		w.WriteString("<html>\n")
 	}
-	io.WriteString(w, "<head>\n")
-	io.WriteString(w, "  <title>")
-	if r.Flags&Smartypants != 0 {
-		r.sr.Process(w, []byte(r.Title))
+	w.WriteString("<head>\n")
+	w.WriteString("  <title>")
+	if r.Extensions&Smartypants != 0 {
+		w.Write(sr.Process([]byte(r.Title)))
 	} else {
-		escapeHTML(w, []byte(r.Title))
+		w.Write(esc([]byte(r.Title)))
 	}
-	io.WriteString(w, "</title>\n")
-	io.WriteString(w, "  <meta name=\"GENERATOR\" content=\"Blackfriday Markdown Processor v")
-	io.WriteString(w, Version)
-	io.WriteString(w, "\"")
-	io.WriteString(w, ending)
-	io.WriteString(w, ">\n")
-	io.WriteString(w, "  <meta charset=\"utf-8\"")
-	io.WriteString(w, ending)
-	io.WriteString(w, ">\n")
+	w.WriteString("</title>\n")
+	w.WriteString("  <meta name=\"GENERATOR\" content=\"Blackfriday Markdown Processor v")
+	w.WriteString(Version)
+	w.WriteString("\"")
+	w.WriteString(ending)
+	w.WriteString(">\n")
+	w.WriteString("  <meta charset=\"utf-8\"")
+	w.WriteString(ending)
+	w.WriteString(">\n")
 	if r.CSS != "" {
-		io.WriteString(w, "  <link rel=\"stylesheet\" type=\"text/css\" href=\"")
-		escapeHTML(w, []byte(r.CSS))
-		io.WriteString(w, "\"")
-		io.WriteString(w, ending)
-		io.WriteString(w, ">\n")
+		w.WriteString("  <link rel=\"stylesheet\" type=\"text/css\" href=\"")
+		w.Write(esc([]byte(r.CSS)))
+		w.WriteString("\"")
+		w.WriteString(ending)
+		w.WriteString(">\n")
 	}
-	if r.Icon != "" {
-		io.WriteString(w, "  <link rel=\"icon\" type=\"image/x-icon\" href=\"")
-		escapeHTML(w, []byte(r.Icon))
-		io.WriteString(w, "\"")
-		io.WriteString(w, ending)
-		io.WriteString(w, ">\n")
-	}
-	io.WriteString(w, "</head>\n")
-	io.WriteString(w, "<body>\n\n")
+	w.WriteString("</head>\n")
+	w.WriteString("<body>\n\n")
 }
 
-func (r *HTMLRenderer) writeTOC(w io.Writer, ast *Node) {
-	buf := bytes.Buffer{}
+func (r *HTMLRenderer) writeDocumentFooter(w *bytes.Buffer) {
+	if r.Flags&CompletePage == 0 {
+		return
+	}
+	w.WriteString("\n</body>\n</html>\n")
+}
 
-	inHeading := false
-	tocLevel := 0
-	headingCount := 0
-
+// Render walks the specified syntax (sub)tree and returns a HTML document.
+func (r *HTMLRenderer) Render(ast *Node) []byte {
+	//println("render_Blackfriday")
+	//dump(ast)
+	// Run Smartypants if it's enabled or simply escape text if not
+	sr := NewSmartypantsRenderer(r.Extensions)
 	ast.Walk(func(node *Node, entering bool) WalkStatus {
-		if node.Type == Heading && !node.HeadingData.IsTitleblock {
-			inHeading = entering
-			if entering {
-				node.HeadingID = fmt.Sprintf("toc_%d", headingCount)
-				if node.Level == tocLevel {
-					buf.WriteString("</li>\n\n<li>")
-				} else if node.Level < tocLevel {
-					for node.Level < tocLevel {
-						tocLevel--
-						buf.WriteString("</li>\n</ul>")
-					}
-					buf.WriteString("</li>\n\n<li>")
-				} else {
-					for node.Level > tocLevel {
-						tocLevel++
-						buf.WriteString("\n<ul>\n<li>")
-					}
-				}
-
-				fmt.Fprintf(&buf, `<a href="#toc_%d">`, headingCount)
-				headingCount++
+		if node.Type == Text {
+			if r.Extensions&Smartypants != 0 {
+				node.Literal = sr.Process(node.Literal)
 			} else {
-				buf.WriteString("</a>")
+				node.Literal = esc(node.Literal)
 			}
-			return GoToNext
 		}
-
-		if inHeading {
-			return r.RenderNode(&buf, node, entering)
-		}
-
 		return GoToNext
 	})
-
-	for ; tocLevel > 0; tocLevel-- {
-		buf.WriteString("</li>\n</ul>")
-	}
-
-	if buf.Len() > 0 {
-		io.WriteString(w, "<nav>\n")
-		w.Write(buf.Bytes())
-		io.WriteString(w, "\n\n</nav>\n")
-	}
-	r.lastOutputLen = buf.Len()
+	var buff bytes.Buffer
+	r.writeDocumentHeader(&buff, sr)
+	ast.Walk(func(node *Node, entering bool) WalkStatus {
+		return r.RenderNode(&buff, node, entering)
+	})
+	r.writeDocumentFooter(&buff)
+	return buff.Bytes()
 }

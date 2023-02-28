@@ -17,7 +17,7 @@ const (
 	List
 	Item
 	Paragraph
-	Heading
+	Header
 	HorizontalRule
 	Emph
 	Strong
@@ -36,6 +36,8 @@ const (
 	TableHead
 	TableBody
 	TableRow
+	Math
+	MathBlock
 )
 
 var nodeTypeNames = []string{
@@ -44,7 +46,7 @@ var nodeTypeNames = []string{
 	List:           "List",
 	Item:           "Item",
 	Paragraph:      "Paragraph",
-	Heading:        "Heading",
+	Header:         "Header",
 	HorizontalRule: "HorizontalRule",
 	Emph:           "Emph",
 	Strong:         "Strong",
@@ -63,28 +65,28 @@ var nodeTypeNames = []string{
 	TableHead:      "TableHead",
 	TableBody:      "TableBody",
 	TableRow:       "TableRow",
+	Math:           "Math",
+	MathBlock:      "MathBlock",
 }
 
 func (t NodeType) String() string {
 	return nodeTypeNames[t]
 }
 
-// ListData contains fields relevant to a List and Item node type.
+// ListData contains fields relevant to a List node type.
 type ListData struct {
-	ListFlags       ListType
-	Tight           bool   // Skip <p>s around list item data if true
-	BulletChar      byte   // '*', '+' or '-' in bullet lists
-	Delimiter       byte   // '.' or ')' after the number in ordered lists
-	RefLink         []byte // If not nil, turns this list item into a footnote item and triggers different rendering
-	IsFootnotesList bool   // This is a list of footnotes
+	ListFlags  ListType
+	Tight      bool   // Skip <p>s around list item data if true
+	BulletChar byte   // '*', '+' or '-' in bullet lists
+	Delimiter  byte   // '.' or ')' after the number in ordered lists
+	RefLink    []byte // If not nil, turns this list item into a footnote item and triggers different rendering
 }
 
 // LinkData contains fields relevant to a Link node type.
 type LinkData struct {
-	Destination []byte // Destination is what goes into a href
-	Title       []byte // Title is the tooltip thing that goes in a title attribute
-	NoteID      int    // NoteID contains a serial number of a footnote, zero if it's not a footnote
-	Footnote    *Node  // If it's a footnote, this is a direct link to the footnote Node. Otherwise nil.
+	Destination []byte
+	Title       []byte
+	NoteID      int
 }
 
 // CodeBlockData contains fields relevant to a CodeBlock node type.
@@ -102,10 +104,10 @@ type TableCellData struct {
 	Align    CellAlignFlags // This holds the value for align attribute
 }
 
-// HeadingData contains fields relevant to a Heading node type.
-type HeadingData struct {
+// HeaderData contains fields relevant to a Header node type.
+type HeaderData struct {
 	Level        int    // This holds the heading level number
-	HeadingID    string // This might hold heading ID, if present
+	HeaderID     string // This might hold header ID, if present
 	IsTitleblock bool   // Specifies whether it's a title block
 }
 
@@ -122,7 +124,7 @@ type Node struct {
 
 	Literal []byte // Text contents of the leaf nodes
 
-	HeadingData   // Populated if Type is Heading
+	HeaderData    // Populated if Type is Header
 	ListData      // Populated if Type is List
 	CodeBlockData // Populated if Type is CodeBlock
 	LinkData      // Populated if Type is Link
@@ -150,9 +152,7 @@ func (n *Node) String() string {
 	return fmt.Sprintf("%s: '%s%s'", n.Type, snippet, ellipsis)
 }
 
-// Unlink removes node 'n' from the tree.
-// It panics if the node is nil.
-func (n *Node) Unlink() {
+func (n *Node) unlink() {
 	if n.Prev != nil {
 		n.Prev.Next = n.Next
 	} else if n.Parent != nil {
@@ -168,10 +168,8 @@ func (n *Node) Unlink() {
 	n.Prev = nil
 }
 
-// AppendChild adds a node 'child' as a child of 'n'.
-// It panics if either node is nil.
-func (n *Node) AppendChild(child *Node) {
-	child.Unlink()
+func (n *Node) appendChild(child *Node) {
+	child.unlink()
 	child.Parent = n
 	if n.LastChild != nil {
 		n.LastChild.Next = child
@@ -183,10 +181,8 @@ func (n *Node) AppendChild(child *Node) {
 	}
 }
 
-// InsertBefore inserts 'sibling' immediately before 'n'.
-// It panics if either node is nil.
-func (n *Node) InsertBefore(sibling *Node) {
-	sibling.Unlink()
+func (n *Node) insertBefore(sibling *Node) {
+	sibling.unlink()
 	sibling.Prev = n.Prev
 	if sibling.Prev != nil {
 		sibling.Prev.Next = sibling
@@ -199,8 +195,7 @@ func (n *Node) InsertBefore(sibling *Node) {
 	}
 }
 
-// IsContainer returns true if 'n' can contain children.
-func (n *Node) IsContainer() bool {
+func (n *Node) isContainer() bool {
 	switch n.Type {
 	case Document:
 		fallthrough
@@ -212,7 +207,7 @@ func (n *Node) IsContainer() bool {
 		fallthrough
 	case Paragraph:
 		fallthrough
-	case Heading:
+	case Header:
 		fallthrough
 	case Emph:
 		fallthrough
@@ -237,11 +232,6 @@ func (n *Node) IsContainer() bool {
 	default:
 		return false
 	}
-}
-
-// IsLeaf returns true if 'n' is a leaf node.
-func (n *Node) IsLeaf() bool {
-	return !n.IsContainer()
 }
 
 func (n *Node) canContain(t NodeType) bool {
@@ -285,15 +275,15 @@ type NodeVisitor func(node *Node, entering bool) WalkStatus
 // Walk is a convenience method that instantiates a walker and starts a
 // traversal of subtree rooted at n.
 func (n *Node) Walk(visitor NodeVisitor) {
-	w := newNodeWalker(n)
-	for w.current != nil {
-		status := visitor(w.current, w.entering)
+	walker := newNodeWalker(n)
+	node, entering := walker.next()
+	for node != nil {
+		status := visitor(node, entering)
 		switch status {
 		case GoToNext:
-			w.next()
+			node, entering = walker.next()
 		case SkipChildren:
-			w.entering = false
-			w.next()
+			node, entering = walker.resumeAt(node, false)
 		case Terminate:
 			return
 		}
@@ -309,17 +299,20 @@ type nodeWalker struct {
 func newNodeWalker(root *Node) *nodeWalker {
 	return &nodeWalker{
 		current:  root,
-		root:     root,
+		root:     nil,
 		entering: true,
 	}
 }
 
-func (nw *nodeWalker) next() {
-	if (!nw.current.IsContainer() || !nw.entering) && nw.current == nw.root {
-		nw.current = nil
-		return
+func (nw *nodeWalker) next() (*Node, bool) {
+	if nw.current == nil {
+		return nil, false
 	}
-	if nw.entering && nw.current.IsContainer() {
+	if nw.root == nil {
+		nw.root = nw.current
+		return nw.current, nw.entering
+	}
+	if nw.entering && nw.current.isContainer() {
 		if nw.current.FirstChild != nil {
 			nw.current = nw.current.FirstChild
 			nw.entering = true
@@ -333,6 +326,16 @@ func (nw *nodeWalker) next() {
 		nw.current = nw.current.Next
 		nw.entering = true
 	}
+	if nw.current == nw.root {
+		return nil, false
+	}
+	return nw.current, nw.entering
+}
+
+func (nw *nodeWalker) resumeAt(node *Node, entering bool) (*Node, bool) {
+	nw.current = node
+	nw.entering = entering
+	return nw.next()
 }
 
 func dump(ast *Node) {
