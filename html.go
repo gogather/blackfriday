@@ -22,6 +22,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"github.com/alecthomas/chroma/quick"
 )
 
 // HTMLFlags control optional behavior of HTML renderer.
@@ -634,13 +636,19 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			r.cr(w)
 		}
 	case CodeBlock:
-		attrs = appendLanguageAttr(attrs, node.Info)
+		// attrs = appendLanguageAttr(attrs, node.Info)
 		r.cr(w)
-		r.out(w, tag("pre", nil, false))
-		r.out(w, tag("code", attrs, false))
-		r.out(w, escCode(node.Literal))
-		r.out(w, tag("/code", nil, false))
-		r.out(w, tag("/pre", nil, false))
+		// fmt.Println("attrs:", attrs)
+		// fmt.Println("info:", string(node.Info))
+		err := quick.Highlight(w, string(node.Literal), "go", "html", "monokai")
+		if err != nil {
+			fmt.Println("Highlight error:", err)
+		}
+		// r.out(w, tag("pre", nil, false))
+		// r.out(w, tag("code", attrs, false))
+		// r.out(w, escCode(node.Literal))
+		// r.out(w, tag("/code", nil, false))
+		// r.out(w, tag("/pre", nil, false))
 		if node.Parent.Type != Item {
 			r.cr(w)
 		}
