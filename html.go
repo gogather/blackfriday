@@ -643,7 +643,7 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 		// fmt.Println("attrs:", attrs)
 		// fmt.Println("info:", string(node.Info))
 
-		lang := ""
+		lang := "plain"
 		infoWords := bytes.Split(node.Info, []byte("\t "))
 		if len(infoWords) > 0 && len(infoWords[0]) > 0 {
 			lang = string(infoWords[0])
