@@ -667,7 +667,7 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 		}
 
 		var buf bytes.Buffer
-		err = f.Format(&buf, styles.Fallback, it)
+		err = f.Format(&buf, styles.Get("github-dark"), it)
 		if err != nil {
 			fmt.Println("Format error:", err)
 		}
