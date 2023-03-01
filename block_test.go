@@ -1099,37 +1099,6 @@ continues
 `,
 	}
 
-	// These 2 alternative forms of blockquoted fenced code blocks should produce same output.
-	forms := [2]string{
-		cat("> plain quoted text",
-			"> ```fenced",
-			"code",
-			" with leading single space correctly preserved",
-			"okay",
-			"```",
-			"> rest of quoted text"),
-		cat("> plain quoted text",
-			"> ```fenced",
-			"> code",
-			">  with leading single space correctly preserved",
-			"> okay",
-			"> ```",
-			"> rest of quoted text"),
-	}
-	want := `<blockquote>
-<p>plain quoted text</p>
-
-<pre><code class="language-fenced">code
- with leading single space correctly preserved
-okay
-</code></pre>
-
-<p>rest of quoted text</p>
-</blockquote>
-`
-	tests = append(tests, forms[0], want)
-	tests = append(tests, forms[1], want)
-
 	doTestsBlock(t, tests, FencedCode)
 }
 

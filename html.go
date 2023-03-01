@@ -23,7 +23,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alecthomas/chroma/quick"
+	chtml "github.com/alecthomas/chroma/v2/formatters/html"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 )
 
 // HTMLFlags control optional behavior of HTML renderer.
@@ -640,10 +642,34 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 		r.cr(w)
 		// fmt.Println("attrs:", attrs)
 		// fmt.Println("info:", string(node.Info))
-		err := quick.Highlight(w, string(node.Literal), "go", "html", "monokai")
-		if err != nil {
-			fmt.Println("Highlight error:", err)
+
+		lang := ""
+		infoWords := bytes.Split(node.Info, []byte("\t "))
+		if len(infoWords) > 0 && len(infoWords[0]) > 0 {
+			lang = string(infoWords[0])
 		}
+
+		options := []chtml.Option{
+			chtml.WithClasses(true),
+			chtml.WithLineNumbers(true),
+		}
+
+		options = append(options, chtml.WithLineNumbers(false))
+		f := chtml.New(options...)
+
+		it, err := lexers.Get(lang).Tokenise(nil, string(node.Literal))
+		if err != nil {
+			fmt.Println("Tokenise error:", err)
+		}
+
+		var buf bytes.Buffer
+		err = f.Format(&buf, styles.Fallback, it)
+		if err != nil {
+			fmt.Println("Format error:", err)
+		}
+
+		r.out(w, buf.Bytes())
+
 		// r.out(w, tag("pre", nil, false))
 		// r.out(w, tag("code", attrs, false))
 		// r.out(w, escCode(node.Literal))
