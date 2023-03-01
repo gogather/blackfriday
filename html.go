@@ -650,14 +650,18 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 		}
 
 		options := []chtml.Option{
-			chtml.WithClasses(true),
-			chtml.WithLineNumbers(true),
+			// chtml.WithClasses(true),
+			chtml.WithLineNumbers(false),
+			chtml.WrapLongLines(true),
 		}
 
-		options = append(options, chtml.WithLineNumbers(false))
 		f := chtml.New(options...)
 
-		it, err := lexers.Get(lang).Tokenise(nil, string(node.Literal))
+		lexer := lexers.Get(lang)
+		if lexer == nil {
+			lexer = lexers.Get("plain")
+		}
+		it, err := lexer.Tokenise(nil, string(node.Literal))
 		if err != nil {
 			fmt.Println("Tokenise error:", err)
 		}
