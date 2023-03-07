@@ -502,7 +502,8 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 			}
 		}
 	case Code:
-		r.out(w, tag("code", nil, false))
+		var attrs = []string{`class="inline-code"`}
+		r.out(w, tag("code", attrs, false))
 		r.out(w, escCode(node.Literal))
 		r.out(w, tag("/code", nil, false))
 	case Document:
