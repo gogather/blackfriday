@@ -61,6 +61,7 @@ const (
 	TOC                                            // Generate a table of contents
 	OmitContents                                   // Skip the main contents (for a standalone table of contents)
 	LaTeXMath                                      // LaTeX inline and display math surrounded by '$' or '$$'
+	MermaidChart                                   // mermaid chart
 
 	CommonHTMLFlags HTMLFlags = UseXHTML
 

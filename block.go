@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"html"
 	"regexp"
+	"strings"
 
 	"github.com/shurcooL/sanitized_anchor_name"
 )
@@ -102,6 +103,19 @@ func (p *parser) block(data []byte) {
 		if p.codePrefix(data) > 0 {
 			data = data[p.code(data):]
 			continue
+		}
+
+		// code block as mermaid:
+		//
+		// ``` mermaid
+		// .....
+		// .....
+		// ```
+		if p.flags&MermaidChart != 0 {
+			if i := p.mermaidBlock(data); i > 0 {
+				data = data[i:]
+				continue
+			}
 		}
 
 		// fenced code block:
@@ -722,6 +736,38 @@ func (p *parser) fencedCodeBlock(data []byte, doRender bool) int {
 	}
 
 	return beg
+}
+
+// mermaidBlock .
+func (p *parser) mermaidBlock(data []byte) int {
+	if strings.HasPrefix(string(data), "``` mermaid\n") || strings.HasPrefix(string(data), "```mermaid\n") {
+		start := 0
+		if strings.HasPrefix(string(data), "``` mermaid\n") {
+			start = 12
+		}
+		if strings.HasPrefix(string(data), "```mermaid\n") {
+			start = 11
+		}
+
+		end := start
+
+		for end+1 < len(data) && (!strings.HasSuffix(string(data[start:end]), "\n```\n")) {
+			end++
+		}
+
+		// no matching delimiter?
+		if end == len(data) {
+			return 0
+		}
+
+		// render the display math
+		if end != 0 && end >= start+5 {
+			container := p.addChild(Mermaid, 0)
+			container.Literal = data[start : end-5]
+		}
+		return end
+	}
+	return 0
 }
 
 func unescapeChar(str []byte) []byte {

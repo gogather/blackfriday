@@ -38,6 +38,7 @@ const (
 	TableRow
 	Math
 	MathBlock
+	Mermaid
 )
 
 var nodeTypeNames = []string{
@@ -67,6 +68,7 @@ var nodeTypeNames = []string{
 	TableRow:       "TableRow",
 	Math:           "Math",
 	MathBlock:      "MathBlock",
+	Mermaid:        "Mermaid",
 }
 
 func (t NodeType) String() string {

@@ -1021,6 +1021,14 @@ func TestFencedCodeBlock(t *testing.T) {
 	doTestsBlock(t, tests, FencedCode)
 }
 
+func TestMermaidCodeBlock(t *testing.T) {
+	var tests = []string{
+		"``` mermaid\nfunc foo() bool {\n\treturn true;\n}\n```\nxxxx",
+		"<pre><code class=\"language-go\">func foo() bool {\n\treturn true;\n}\n</code></pre>\n",
+	}
+	doTestsBlock(t, tests, MermaidChart)
+}
+
 func TestFencedCodeInsideBlockquotes(t *testing.T) {
 	cat := func(s ...string) string { return strings.Join(s, "\n") }
 	var tests = []string{
