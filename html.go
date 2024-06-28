@@ -747,9 +747,9 @@ func (r *HTMLRenderer) RenderNode(w io.Writer, node *Node, entering bool) WalkSt
 		r.out(w, []byte("</span>"))
 		r.cr(w)
 	case Mermaid:
-		r.out(w, []byte("<span v-mermaid>"))
+		r.out(w, []byte("<div v-mermaid>"))
 		r.out(w, escCode(node.Literal))
-		r.out(w, []byte("</span>"))
+		r.out(w, []byte("</div>"))
 
 	default:
 		panic("Unknown node type " + node.Type.String())
